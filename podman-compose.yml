@@ -1,0 +1,48 @@
+version: "3.9"
+
+services:
+  frontend:
+    image: localhost/hybrid-chatbot-frontend:latest
+    container_name: hybrid-chatbot-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+
+  backend:
+    image: localhost/hybrid-chatbot-api:latest
+    container_name: hybrid-chatbot-backend
+    env_file:
+      - ./backend/.env
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+    ports:
+      - "8000:8000"
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  ollama:
+    image: docker.io/ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    mem_limit: 8g
+    cpus: 4.0
+
+volumes:
+  ollama_data:

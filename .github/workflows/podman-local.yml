@@ -1,0 +1,44 @@
+name: local-podman-ci
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Build backend test image
+        run: |
+          podman build --format docker -t hybrid-chatbot-api-test -f backend/Containerfile backend
+
+      - name: Run backend smoke tests
+        run: |
+          podman run --rm --workdir /app -v "$PWD/backend/tests:/app/tests:Z" hybrid-chatbot-api-test pytest -q tests/test_main.py
+
+      - name: Build backend runtime image
+        run: |
+          podman build --format docker -t hybrid-chatbot-api -f backend/Containerfile backend
+
+      - name: Build frontend runtime image
+        run: |
+          podman build --format docker -t hybrid-chatbot-frontend -f frontend/Containerfile frontend
