@@ -1,5 +1,14 @@
 # Hybrid Chatbot
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Python 3.11](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![React 18](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![Ollama](https://img.shields.io/badge/Ollama-local_LLM-000000?logo=ollama&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI-API-412991?logo=openai&logoColor=white)
+![Gemini](https://img.shields.io/badge/Gemini-API-8E75B2?logo=googlegemini&logoColor=white)
+![Podman](https://img.shields.io/badge/Podman-892CA0?logo=podman&logoColor=white)
+
 A hybrid AI chatbot with a **React** frontend and a **FastAPI** backend. One chat API routes each prompt either to a **cloud model** (OpenAI or Gemini) or to a **local model** (Ollama). Private prompts stay on the local model, and if the cloud fails the router falls back to local. The whole stack runs in containers with **Podman**.
 
 ```
@@ -224,3 +233,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:3000/api/chat" -ContentTyp
 - If the UI can't reach the backend, check http://localhost:8000/health.
 - Cloud routes need valid API keys in `backend/.env`. Without them, requests fall back to Ollama.
 - If `podman logs` shows nothing, check the container is still running with `podman ps`.
+
+## License
+
+[MIT](LICENSE) © Nixon Varghese
