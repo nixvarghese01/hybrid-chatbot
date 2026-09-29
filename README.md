@@ -1,164 +1,118 @@
-# Hybrid Chatbot Application
+# Hybrid Chatbot
 
-Hybrid chatbot platform with a React frontend, a FastAPI backend, OpenAI and Gemini for cloud reasoning, and Ollama for local or self-hosted inference. This repository is now Podman-only for build, runtime, and verification workflows.
+A hybrid AI chatbot with a **React** frontend and a **FastAPI** backend. One chat API routes each prompt either to a **cloud model** (OpenAI or Gemini) or to a **local model** (Ollama). Private prompts stay on the local model, and if the cloud fails the router falls back to local. The whole stack runs in containers with **Podman**.
 
-## Aim
+```
+                    ┌────────────── Podman network ───────────────────────────────┐
+ Browser ──:3000──▶ │ frontend (nginx + React) ──/api──▶ backend (FastAPI :8000)  │
+                    │                                        │ ModelRouter         │
+                    │                    ┌───────────────────┼──────────────┐      │
+                    │                    ▼                   ▼              ▼      │
+                    │              OpenAI API          Gemini API    ollama :11434 │
+                    │              (cloud)             (cloud)       (local model) │
+                    └─────────────────────────────────────────────────────────────┘
+```
 
-The aim of this project is to provide a clean production-style chatbot foundation that can:
+## Features
 
-- expose a single chat API
-- switch between cloud and local AI models
-- keep privacy-sensitive prompts on the local model
-- fall back gracefully if the cloud model fails
-- run fully in containers with Podman
+- **One chat endpoint** (`POST /chat`) for every model
+- **Privacy-aware routing:** prompts with sensitive keywords never leave the machine
+- **Automatic fallback:** primary cloud, then the other cloud, then local Ollama
+- **Retries and timeouts** on every model client, and the chosen provider is logged
+- **Model picker in the UI:** Local, OpenAI or Gemini for each message
+- **Podman only:** multi-stage Containerfiles, a compose file, and PowerShell scripts that fall back to plain `podman run` when no compose provider is installed
+- **OpenAPI docs** at `/api/docs` and `/api/redoc`
 
-## Why This Architecture
+## Quick start
 
-We use a hybrid AI setup because one model path is not ideal for every request:
+Prerequisites: Podman. For the cloud routes, an OpenAI and/or Gemini API key; the local route works without keys.
 
-- OpenAI and Gemini provide cloud model paths for stronger reasoning and faster hosted responses.
-- Ollama is the safer local path for private prompts, lower cloud dependency, and resilience.
-- The router allows the app to choose the best path automatically while still supporting an explicit `use_local` override.
+```powershell
+git clone https://github.com/nixvarghese01/hybrid-chatbot.git
+cd hybrid-chatbot
+Copy-Item backend\.env.example backend\.env   # then add your API keys
+.\scripts\container_stack.ps1                  # build images, start the stack, pull the Ollama model
+```
 
-## Chatbot Purpose
+Open http://localhost:3000.
 
-This project is a starter template for:
+## Tech stack
 
-- internal assistants
-- support copilots
-- privacy-aware local AI workflows
-- hybrid cloud plus local experimentation
-- containerized deployments in Podman environments
+| Layer | Tools |
+|---|---|
+| Frontend | React 18, Vite 5, nginx (serves the UI and proxies `/api` to the backend) |
+| Backend | FastAPI, Uvicorn, Pydantic, httpx |
+| AI | OpenAI (`gpt-4o-mini` by default), Google Gemini (`gemini-2.5-flash`), Ollama (`llama3.2:1b`) |
+| Containers | Podman, `podman compose`, multi-stage Containerfiles |
+| Tests | pytest |
 
-## Stack
+## How routing works
 
-### Frontend
+The request can set `use_local` and `cloud_provider`:
 
-- React
-  Purpose: chat UI with message history, model selector, and loading state
-- Vite
-  Purpose: static asset build for the frontend container
-- Nginx
-  Purpose: serves the built frontend and proxies `/api` requests to the backend container
+```json
+POST /chat
+{ "message": "Compare REST and gRPC", "use_local": false, "cloud_provider": "gemini" }
+```
+```json
+{ "reply": "...", "provider": "gemini", "model_used": "gemini-2.5-flash", "fallback_used": false }
+```
 
-### Backend
+1. `use_local: true` → **Ollama**.
+2. The message contains a sensitive keyword → **Ollama**. The keywords are: password, ssn, social security, bank account, credit card, private key, secret, confidential, medical record, personal data.
+3. Otherwise → the **cloud provider**: the request's `cloud_provider`, or `CLOUD_PROVIDER` from `.env` (default `openai`).
+4. If the chosen cloud provider fails, the router tries the other cloud provider, then Ollama. `fallback_used` is `true` in the response when this happens.
 
-- FastAPI
-  Purpose: async API with typed request and response models
-- Uvicorn
-  Purpose: ASGI server for the FastAPI app
-- Pydantic
-  Purpose: request validation and predictable schema handling
+Complex-reasoning prompts (40+ words, or words like *analyze*, *compare*, *design*, *debug*) are detected and logged with each routing decision.
 
-### AI Integrations
+## API
 
-- OpenAI
-  Purpose: cloud model path for complex reasoning
-- Gemini
-  Purpose: additional cloud model path with fast hosted inference and free-tier-friendly usage
-- Ollama
-  Purpose: local model path for privacy-sensitive or self-hosted requests
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Health check |
+| `POST` | `/chat` | Send a message (see above) |
+| `GET` | `/api/docs`, `/api/redoc`, `/api/openapi.json` | API documentation |
 
-### Container Platform
+Through the frontend proxy, the same endpoints are under `http://localhost:3000/api/...`.
 
-- Podman
-  Purpose: image build and container runtime
-- `podman compose`
-  Purpose: multi-container orchestration when a compose provider is installed
-- Podman network fallback
-  Purpose: keeps the stack fully runnable even when `podman compose` is unavailable on the machine
-
-Important:
-
-- local scripts assume Podman is already installed
-- this repo does not install Podman on your local machine
-- container build and run are done with Podman only
-
-## Project Structure
+## Project structure
 
 ```text
 .
-|-- .github/
+|-- .github/workflows/podman-local.yml   CI: build and test with Podman (manual trigger)
 |-- backend/
 |   |-- services/
-|   |   |-- gemini_client.py
-|   |   |-- ollama_client.py
+|   |   |-- router.py            routing, fallback and retry logic
 |   |   |-- openai_client.py
-|   |   `-- router.py
-|   |-- tests/
-|   |   `-- test_main.py
-|   |-- .dockerignore
+|   |   |-- gemini_client.py
+|   |   `-- ollama_client.py
+|   |-- tests/test_main.py
 |   |-- .env.example
 |   |-- Containerfile
-|   |-- main.py
+|   |-- main.py                  FastAPI app and request/response models
 |   `-- requirements.txt
 |-- frontend/
-|   |-- nginx/
-|   |   `-- default.conf
-|   |-- public/
-|   |-- src/
-|   |   |-- App.jsx
-|   |   |-- main.jsx
-|   |   `-- styles.css
-|   |-- .dockerignore
+|   |-- nginx/default.conf       serves the UI, proxies /api to the backend
+|   |-- src/                     App.jsx, main.jsx, styles.css
 |   |-- .env.example
 |   |-- Containerfile
 |   |-- index.html
-|   |-- package-lock.json
 |   `-- package.json
-|-- scripts/
-|   |-- clean_stack.ps1
-|   |-- container_stack.ps1
-|   |-- start_stack.ps1
-|   |-- status_stack.ps1
-|   `-- stop_stack.ps1
-|-- .dockerignore
-|-- .gitignore
+|-- scripts/                     start, stop, status and clean helpers (PowerShell)
 |-- podman-compose.yml
 `-- README.md
 ```
 
-## Runtime Behavior
+## Configuration
 
-### Backend Endpoints
-
-- `GET /health`
-- `POST /chat`
-- `GET /api/docs`
-- `GET /api/redoc`
-- `GET /api/openapi.json`
-
-### Routing Rules
-
-- `use_local=true` routes directly to Ollama
-- `cloud_provider=openai` forces the OpenAI cloud route
-- `cloud_provider=gemini` forces the Gemini cloud route
-- sensitive keywords route to Ollama
-- complex reasoning requests prefer the configured cloud provider
-- if the configured cloud provider fails, the router tries the alternate cloud provider if configured
-- if cloud providers fail, the backend falls back to Ollama
-
-### Operational Behavior
-
-- OpenAI client has retry and timeout handling
-- Gemini client has retry and timeout handling
-- Ollama client has retry and timeout handling
-- router logs the chosen model provider
-- CORS is enabled for frontend access
-- the frontend exposes direct route choices for `Local`, `OpenAI`, and `Gemini`
-
-## Environment Configuration
-
-Create the backend environment file:
+Create `backend/.env` from the example:
 
 ```powershell
 Copy-Item backend\.env.example backend\.env
 ```
 
-Backend variables:
-
 ```env
-CLOUD_PROVIDER=openai
+CLOUD_PROVIDER=openai            # openai or gemini: which cloud provider is tried first
 OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_MODEL=gpt-4o-mini
 
@@ -166,14 +120,13 @@ GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_MODEL=gemini-2.5-flash
 GEMINI_MAX_OUTPUT_TOKENS=256
 
-# Host Ollama
+# Ollama on the host:
 OLLAMA_BASE_URL=http://host.containers.internal:11434
-
-# Containerized Ollama
+# Ollama in the stack's own container:
 # OLLAMA_BASE_URL=http://ollama:11434
-
 OLLAMA_MODEL=llama3.2:1b
 OLLAMA_NUM_PREDICT=192
+
 REQUEST_TIMEOUT_SECONDS=60
 MODEL_RETRY_COUNT=2
 MODEL_RETRY_DELAY_SECONDS=1
@@ -182,201 +135,92 @@ ROUTER_RETRY_COUNT=1
 ROUTER_RETRY_DELAY_SECONDS=1
 ```
 
-Notes:
+- `container_stack.ps1` sets `OLLAMA_BASE_URL=http://ollama:11434` for the backend container automatically.
+- The frontend calls `/api` through nginx, so the containerized UI needs no extra configuration.
+- The UI can override the cloud provider on each message.
+- `.env` files are git-ignored; only the `.env.example` templates are committed.
 
-- For the containerized stack in this repo, `container_stack.ps1` forces `OLLAMA_BASE_URL=http://ollama:11434` for the backend container.
-- The frontend container uses `/api` and does not require a local frontend build step.
-- Set `CLOUD_PROVIDER=openai` to prefer OpenAI first, or `CLOUD_PROVIDER=gemini` to prefer Gemini first.
-- The frontend can override the default cloud provider per request, so users can pick `OpenAI` or `Gemini` directly in the UI.
+## Running with Podman
 
-## Podman Deployment
-
-This project is meant to be built and run with Podman images only.
-
-### Standard Start
+### Start
 
 ```powershell
 .\scripts\container_stack.ps1
 ```
 
-What the script does:
+The script:
+1. checks that Podman is installed (it doesn't install it for you)
+2. stops old project containers and removes the project network
+3. builds the backend and frontend multi-stage images
+4. starts the stack with `podman compose` if a compose provider exists, otherwise with plain `podman run`
+5. waits for Ollama and pulls the configured model if it's missing
+6. checks backend health and frontend availability
 
-- checks the existing Podman installation
-- stops old project containers and removes the project network
-- builds the backend multi-stage image
-- builds the frontend multi-stage image
-- starts the stack with `podman compose` if a compose provider exists
-- otherwise starts the same stack with plain `podman run`
-- waits for Ollama to become ready
-- pulls the configured Ollama model if it is missing
-- verifies backend health
-- verifies frontend availability
+### Day-to-day scripts
 
-### Easy Local Management
+| Script | What it does |
+|---|---|
+| `start_stack.ps1` | Builds current images and starts the full stack |
+| `stop_stack.ps1` | Stops project containers and removes the project network |
+| `status_stack.ps1` | Shows container status plus frontend, docs and Ollama health |
+| `clean_stack.ps1` | Stops the stack and removes runtime resources; keeps the Ollama model volume by default |
 
-Use these helper scripts for day-to-day work:
+`clean_stack.ps1` options:
+- `-RemoveImages`: remove the project images
+- `-PruneDanglingImages`: remove dangling build layers
+- `-RemoveOllamaVolume`: delete downloaded Ollama models, which are then re-downloaded on the next start
 
-```powershell
-.\scripts\start_stack.ps1
-.\scripts\stop_stack.ps1
-.\scripts\status_stack.ps1
-.\scripts\clean_stack.ps1
-```
+### URLs
 
-What each one does:
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:3000 |
+| API docs | http://localhost:8000/api/docs (or http://localhost:3000/api/docs) |
+| ReDoc | http://localhost:8000/api/redoc |
+| Backend health | http://localhost:8000/health |
+| Ollama models | http://localhost:11434/api/tags |
 
-- `start_stack.ps1`
-  Builds current images and starts the full stack
-- `stop_stack.ps1`
-  Stops project containers and removes the project network
-- `status_stack.ps1`
-  Shows container status plus frontend, docs, redoc, and Ollama endpoint health
-- `clean_stack.ps1`
-  Stops the stack and removes runtime resources while preserving the Ollama model volume by default
-
-Useful cleanup options:
-
-```powershell
-.\scripts\clean_stack.ps1 -RemoveImages
-.\scripts\clean_stack.ps1 -PruneDanglingImages
-.\scripts\clean_stack.ps1 -RemoveOllamaVolume
-```
-
-Notes:
-
-- `-RemoveImages` removes only the project runtime images
-- `-PruneDanglingImages` removes dangling Podman build layers
-- `-RemoveOllamaVolume` deletes the stored Ollama models and forces model re-download next start
-
-### Published URLs
-
-- frontend: `http://localhost:3000`
-- backend docs: `http://localhost:8000/api/docs`
-- backend redoc: `http://localhost:8000/api/redoc`
-- proxied docs from frontend: `http://localhost:3000/api/docs`
-- proxied redoc from frontend: `http://localhost:3000/api/redoc`
-- backend health: `http://localhost:8000/health`
-- ollama tags: `http://localhost:11434/api/tags`
-
-Expected local response time:
-
-- with `llama3.2:1b`, short local replies are usually within about `8` to `30` seconds on this laptop-class setup
-- first requests after a restart can be slower while the model warms up
+With `llama3.2:1b` on a typical laptop CPU, short local replies take roughly 8–30 seconds, and the first request after a restart is slower while the model loads.
 
 ### Logs
 
-If `podman compose` is available:
-
 ```powershell
-podman compose -f podman-compose.yml logs -f frontend
-podman compose -f podman-compose.yml logs -f backend
-podman compose -f podman-compose.yml logs -f ollama
+# with podman compose
+podman compose -f podman-compose.yml logs -f backend     # or frontend / ollama
+
+# with the plain-podman fallback
+podman logs -f hybrid-chatbot-backend                    # or hybrid-chatbot-frontend / ollama
 ```
 
-If the stack is started through the fallback path:
+## Build and test
 
 ```powershell
-podman logs -f hybrid-chatbot-frontend
-podman logs -f hybrid-chatbot-backend
-podman logs -f ollama
-```
-
-### Stop The Stack
-
-```powershell
-podman rm -f hybrid-chatbot-frontend hybrid-chatbot-backend ollama
-podman network rm hybrid-chatbot-net
-```
-
-## Build And Verification
-
-### Build Images With Podman
-
-```powershell
+# build the images
 podman build --format docker -t hybrid-chatbot-api -f backend\Containerfile backend
 podman build --format docker -t hybrid-chatbot-frontend -f frontend\Containerfile frontend
+
+# run the backend tests inside the image
+podman run --rm --workdir /app -v ${PWD}\backend\tests:/app/tests:Z hybrid-chatbot-api pytest -q tests/test_main.py
 ```
 
-### Run Backend Smoke Tests In Container
-
-```powershell
-podman build --format docker -t hybrid-chatbot-api-test -f backend\Containerfile backend
-podman run --rm --workdir /app -v ${PWD}\backend\tests:/app/tests:Z hybrid-chatbot-api-test pytest -q tests/test_main.py
-```
-
-### Verify Running Services
-
-```powershell
-curl.exe -I http://localhost:3000
-curl.exe http://localhost:8000/health
-curl.exe http://localhost:11434/api/tags
-curl.exe -I http://localhost:3000/api/docs
-curl.exe -I http://localhost:3000/api/redoc
-```
-
-### Verify End-To-End Chat
+End-to-end check through the frontend proxy:
 
 ```powershell
 $body = @{ message = "Say hello in one sentence."; use_local = $true } | ConvertTo-Json
 Invoke-RestMethod -Method Post -Uri "http://localhost:3000/api/chat" -ContentType "application/json" -Body $body
-```
 
-Verify a specific cloud route:
-
-```powershell
 $body = @{ message = "Reply with exactly: cloud-check"; use_local = $false; cloud_provider = "gemini" } | ConvertTo-Json
 Invoke-RestMethod -Method Post -Uri "http://localhost:3000/api/chat" -ContentType "application/json" -Body $body
 ```
 
-## Compose File
+## CI
 
-This repo includes [podman-compose.yml](podman-compose.yml).
+[`.github/workflows/podman-local.yml`](.github/workflows/podman-local.yml) builds the images and runs the tests with Podman on GitHub Actions. It runs on **manual trigger** (Actions → local-podman-ci → Run workflow).
 
-It defines:
+## Troubleshooting
 
-- `frontend`
-- `backend`
-- `ollama`
-
-It assumes the images are already built locally by Podman and then runs the stack from those images.
-
-Current machine note:
-
-- the compose file is aligned to the project
-- this machine does not currently have a compose provider in `PATH`
-- local management therefore runs through the verified plain-Podman fallback scripts
-
-## Verification Status
-
-The project has been verified with the following checks:
-
-- backend modules compile successfully
-- frontend multi-stage image build succeeds
-- backend multi-stage image build succeeds
-- backend smoke tests pass inside the container image
-- backend health endpoint responds successfully
-- frontend responds successfully from the containerized UI
-- end-to-end `/api/chat` works through the frontend to the backend and Ollama
-- proxied Swagger and ReDoc work through the frontend UI paths
-- backend now supports OpenAI and Gemini cloud paths in addition to Ollama local routing
-- frontend now exposes direct selection for `Local`, `OpenAI`, and `Gemini`
-- live frontend proxy verification returned `200` for `/api/docs` and `/api/redoc`
-- live end-to-end chat through `http://localhost:3000/api/chat` returned a successful Ollama response using `llama3.2:1b`
-- live direct backend chat through `http://localhost:8000/chat` returned a successful Ollama response using `llama3.2:1b`
-- live local-model selector path was rechecked through the frontend after the selector update
-- current local timing sample through the frontend proxy was about `29s` for a short response on this machine
-- OpenAI and Gemini UI routes are wired end to end, but live cloud success still depends on valid keys in `backend/.env`
-
-## CI Workflow
-
-The repo includes [.github/workflows/podman-local.yml](.github/workflows/podman-local.yml) for repeatable container-based verification in GitHub Actions.
-
-## Common Issues
-
-- `localhost` inside a container points to the container itself, not your host machine
-- if host Ollama is used instead of the included containerized stack, set `OLLAMA_BASE_URL=http://host.containers.internal:11434`
-- if compose mode cannot start, the PowerShell stack script automatically falls back to plain `podman run`
-- if docs are opened from the frontend, use `http://localhost:3000/api/docs` and `http://localhost:3000/api/redoc`
-- if the frontend cannot reach the backend, confirm the UI is running on `http://localhost:3000` and the backend is healthy on `http://localhost:8000/health`
-- if cloud mode fails, the app falls back to Ollama when available
-- if `podman logs` is empty, confirm the container is still running with `podman ps`
+- Inside a container, `localhost` means the container itself. To reach Ollama on the host, use `http://host.containers.internal:11434`.
+- If compose mode can't start, the start script falls back to plain `podman run` automatically.
+- If the UI can't reach the backend, check http://localhost:8000/health.
+- Cloud routes need valid API keys in `backend/.env`. Without them, requests fall back to Ollama.
+- If `podman logs` shows nothing, check the container is still running with `podman ps`.
